@@ -18,7 +18,7 @@ class Settings:
     def load_secrets(self):
         # secret
         self.dbl_token = ''
-        self.mongo_db = MONGO_DB
+        self.mongo_db = MONGO_
         self.bot_token = TOKEN_HERE
         self.mode = 'development'
 
