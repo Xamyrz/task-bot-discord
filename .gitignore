@@ -10,6 +10,7 @@ __pycache__/
 *.so
 
 # secret ignore
+essentials/settings.py
 
 
 # Distribution / packaging
