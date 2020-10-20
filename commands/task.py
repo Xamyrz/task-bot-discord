@@ -3,6 +3,7 @@ import datetime
 import logging
 import os
 import sys
+import time
 import traceback
 from string import ascii_lowercase
 
@@ -14,6 +15,7 @@ from operator import contains, or_
 
 import discord
 from bson import ObjectId
+from discord.utils import get
 from matplotlib import rcParams
 from matplotlib.afm import AFM
 
@@ -40,6 +42,7 @@ class Task:
     def __init__(self, client, ctx=None, load=False, server=None):
         self.bot = client
         self.cursor_pos = 0
+        self.ctx = ctx
 
         self.user_ids = []
         self.user_list = []
@@ -63,12 +66,13 @@ class Task:
             self.day_1_notified = False
             self.date_notified = None
             self.last_notified = None
+            self.task_role = []
 
             self.tasks_assigned = []
 
     @staticmethod
     def get_preset_options():
-        return ['✅', '🤐', '❎']
+        return ['✅', '❌', '⏩']
 
     async def clean_up(self, channel):
         if isinstance(channel, discord.TextChannel):
@@ -97,10 +101,11 @@ class Task:
         self.days_7_notified = d['days_7_notified']
         self.day_1_notified = d['day_1_notified']
         self.date_notified = d['date_notified']
+        self.task_role = d['task_role']
         self.cursor_pos = 0
         self.task_complete = d['task_complete']
 
-    async def users_from_dict(self, d):
+    def users_from_dict(self, d, role=False):
         self.user_list.append(self.server.get_member(int(d['user_id'])))
 
     async def task_to_dict(self):
@@ -109,6 +114,7 @@ class Task:
             'task_name': self.task_name,
             'task_author': str(self.author.id),
             'task_description': self.task_description,
+            'task_role': self.task_role,
             'date_created': self.date_created,
             'deadline_tz': self.deadline_tz,
             'deadline': self.deadline,
@@ -122,11 +128,9 @@ class Task:
         try:
             await self.bot.db.tasks.update_one({'server_id': str(self.server.id), 'task_name': self.task_name},
                                            {'$set': await self.task_to_dict()}, upsert=True)
-            print("got here....")
         except Exception as e:
             logging.error(traceback.format_exc())
             print(e)
-        print("server id ",self.server.id)
 
     async def user_task_to_dict(self):
         return ({
@@ -137,7 +141,6 @@ class Task:
         if not self.user_ids:
             return
         for x in self.user_ids:
-            print(x)
             await self.bot.db.users.update_one({'user_id': str(x), 'server_id': str(self.server.id)},
                                                {'$addToSet': await self.user_task_to_dict()}, upsert=True)
 
@@ -154,7 +157,8 @@ class Task:
 
     async def is_valid_id(self, user):
         set = '<@!>'
-        return reduce(or_, map(contains, len(set) * [user], set))
+        sett = '<@&>'
+        return reduce(or_, map(contains, len(set) * [user], set or sett))
 
     async def get_user_reply(self, ctx):
         def is_correct(m):
@@ -254,6 +258,19 @@ class Task:
             raise InvalidInput
         return string
 
+    async def user_role(self):
+        for role in self.task_role:
+            rol = get(self.server.roles, id=role)
+            for user in self.server.members:
+                if user.bot:
+                    continue
+                if rol in user.roles:
+                    if len(set(self.task_role)) != len(self.task_role):
+                        continue
+                    if user.id not in self.user_list:
+                        print("some", user.id)
+                        self.user_list.append(self.server.get_member(user.id))
+
     async def set_task_description(self, ctx, args, force=None):
 
         async def get_valid(in_reply):
@@ -275,31 +292,45 @@ class Task:
             if len(set(users)) != len(users):
                 return -1
             for member in ctx.guild.members:
-                if j >= args.__len__() - 1:
+                if j >= args.__len__() - self.task_role.__len__():
                     break
                 if member.id == users[j]:
                     j += 1
                     print(f"{member.id} {member.display_name} found")
             return j
 
-        async def users_to_int():
+        async def check_roles():
+            z = 0
+            # check for the same user in array
+            if len(set(self.task_role)) != len(self.task_role):
+                return -1
+            for role in ctx.guild.roles:
+                if z >= self.task_role.__len__():
+                    break
+                if role.id == self.task_role[z]:
+                    z += 1
+                    print(f"{role.id} {role.name} found")
+            return z
+
+        async def users_members_to_int():
             # removes unnecesary characters in the id
             usrs = []
-            for x in range(1, args.__len__()):
-                print(x)
-                if not await self.is_valid_id(args[x]):
-                    return await self.wizard_says(ctx, str(f"Invalid User: {args[x]}"), footer=False)
-                usrs.append(int(args[x].translate({ord(i): None for i in '<@!>'})))
+            for x in args:
+                if not await self.is_valid_id(x):
+                    return await self.wizard_says(ctx, str(f"Invalid User: {x}"), footer=False)
+                if "<@&" in x:
+                    self.task_role.append(int(x.translate({ord(i): None for i in '<@&>'})))
+                elif "<@!" in x:
+                    usrs.append(int(x.translate({ord(i): None for i in '<@!>'})))
             return usrs
 
-        users = await users_to_int()
-        if args.__len__() - 1 == await check_users():
+        users = await users_members_to_int()
+        if args.__len__() == await check_users() + await check_roles():
             try:
                 self.task_name = await get_valid(force)
                 return
             except InputError:
                 pass
-            print(datetime.datetime.now(timezone('Europe/Dublin')).strftime("%Y-%m-%d %H:%M:%S"))
             message = await self.wizard_says(ctx, f'Please enter the task description.\n',
                                              footer=True)
             while True:
@@ -317,11 +348,102 @@ class Task:
                     await self.add_error(message, '**Keep the task description between 3 and 400 valid characters**')
             for usr in self.user_ids:
                 self.user_list.append(self.server.get_member(int(usr)))
+            await self.user_role()
 
         else:
             errormsg = await self.wizard_says(ctx, str(f"TASK CREATION ERROR"), footer=False)
             await self.add_error(errormsg, '**Can\'t assign the same task to one user multiple times**', False)
             raise StopWizard
+
+    async def assign_task(self, force=None):
+
+        async def check_users():
+            j = 0
+            # check for the same user in array
+            if len(set(self.user_ids)) != len(self.user_ids):
+                raise InputError
+            for member in self.ctx.guild.members:
+                if j >= self.user_ids.__len__():
+                    break
+                if member.id == int(self.user_ids[j]):
+                    j += 1
+                    print(f"{member.id} {member.display_name} found")
+            return j
+
+        async def check_roles():
+            z = 0
+            # check for the same user in array
+            if len(set(self.task_role)) != len(self.task_role):
+                raise InvalidInput
+            return self.task_role.__len__()
+
+        async def users_members_to_int(in_reply):
+            # removes unnecesary characters in the id
+            split = [self.sanitize_string(r.strip()) for r in in_reply.split(" ")]
+            usrs = []
+            count = 0
+            for x in split:
+                if not await self.is_valid_id(x):
+                    raise InvalidInput
+                if "<@&" in x:
+                    if int(x.translate({ord(i): None for i in '<@&>'})) in self.task_role:
+                        continue
+                    self.task_role.append(int(x.translate({ord(i): None for i in '<@&>'})))
+                    print("<&", self.task_role)
+                elif "<@!" in x:
+                    if int(x.translate({ord(i): None for i in '<@!>'})) in self.user_ids:
+                        continue
+                    self.user_ids.append(int(x.translate({ord(i): None for i in '<@!>'})))
+                    print("<!", self.user_ids)
+                count += 1
+            return count
+
+        def return_users():
+            string = ""
+            for x in self.user_list:
+                string += x.display_name + '\n'
+            return string
+
+        def return_roles():
+            string = ""
+            print(self.task_role)
+            for role in self.ctx.guild.roles:
+                for x in self.task_role:
+                    if role.id == x:
+                        string += "@" + role.name + '\n'
+            return string
+
+        message = await self.wizard_says(self.ctx, str(f'Please enter the users/roles to assign to task {self.task_name}.\n '
+                                                      f'***Currently assigned to:***\n {return_users()}{return_roles()}'),
+                                             footer=True)
+
+        while True:
+            try:
+                if force:
+                    reply = force
+                    force = None
+                else:
+                    reply = await self.get_user_reply(self.ctx)
+                    print('u ',await users_members_to_int(reply))
+                    print('u2 ',await check_users())
+                    print('r', await check_roles())
+                    await users_members_to_int(reply)
+                    await check_roles()
+                    await check_users()
+                    break
+            except InvalidInput:
+                await self.add_error(message, '**invalid user/role.**')
+            except InputError:
+                await self.add_error(message, '**can\'t assign task if already assigned**')
+            except OutOfRange:
+                await self.add_error(message, '**Only type numbers you can see in the list.**')
+            except InvalidRoles as e:
+                await self.add_error(message, f'**The following roles are invalid: {e.roles}**')
+
+        # else:
+        #     errormsg = await self.wizard_says(ctx, str(f"TASK ASSIGN ERROR"), footer=False)
+        #     await self.add_error(errormsg, '**Can\'t assign the same task to one user multiple times**', False)
+        #     raise StopWizard
 
     async def set_task_name(self, ctx, force=None):
 
@@ -346,7 +468,6 @@ class Task:
             return
         except InputError:
             pass
-            print(datetime.datetime.now(timezone('Europe/Dublin')).strftime("%Y-%m-%d %H:%M:%S"))
             message = await self.wizard_says(ctx, """**Now type a unique one word identifier, a label, 
             for your poll.** This label will be used to refer to the task. Keep it short and significant.""",
                                              footer=True)
@@ -423,7 +544,6 @@ class Task:
                     await self.add_vaild(message, 'no deadline')
                 else:
                     self.deadline_tz = dt.utcoffset().total_seconds() / 3600
-                    print("deadlinetz ", self.deadline_tz)
                     self.date_created = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
                     await self.add_vaild(message, self.deadline.strftime('%d-%b-%Y %H:%M %Z'))
                 break
@@ -469,11 +589,13 @@ class Task:
         # ## adding fields with custom, length sensitive function
 
         embed = self.add_field_custom(name='**Task description**', value=self.task_description, embed=embed)
-
+        embed = self.add_field_custom(name='**Complete   **',
+                                       value="✅" if await self.is_complete() else "❌", embed=embed)
         if self.deadline != 0:
             embed = self.add_field_custom(name='**Deadline**', value=await self.get_deadline(string=True), embed=embed)
         else:
             embed = self.add_field_custom(name='**Deadline**', value="No deadline", embed=embed)
+
 
         return embed
 
@@ -485,3 +607,24 @@ class Task:
             return msg
         else:
             return msg
+
+    @staticmethod
+    async def load_from_db(bot, server_id, task_name, ctx=None, ):
+        query = await bot.db.tasks.find_one({'server_id': str(server_id), 'task_name': task_name})
+        if query is not None:
+            t = Task(bot, ctx, load=True)
+            await t.task_from_dict(query)
+            return t
+        else:
+            return None
+
+    # to be completed later....
+    def has_required_role(self, user):
+        try:
+            return True
+            # return not set([r.name for r in user.roles]).isdisjoint(self.roles)
+        except AttributeError:
+            return False
+
+    async def refresh(self, message):
+        await message.edit(embed=await self.generate_embed())

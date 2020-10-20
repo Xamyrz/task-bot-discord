@@ -9,15 +9,18 @@ from commands import *
 from discord.ext import commands, tasks
 
 from commands import *
+from commands.assign import *
 from commands.task import *
+from essentials.messagecache import MessageCache
+from essentials.multi_server import ask_for_server
 
-client = commands.Bot(command_prefix="/")
+client = commands.Bot(command_prefix="/task ")
 mydbcursor = None
 logger = logging.getLogger('discord')
 
 extensions = ['essentials.notifications']
-for ext in extensions:
-    client.load_extension(ext)
+
+client.message_cache = MessageCache(client)
 
 
 @client.event
@@ -27,6 +30,8 @@ async def on_ready():
     client.db = mongo.taskmaster
     client.session = aiohttp.ClientSession()
     print(client.db)
+    for ext in extensions:
+        client.load_extension(ext)
 
     try:
         db_server_ids = [entry['_id'] async for entry in client.db.config.find({}, {})]
@@ -53,32 +58,38 @@ async def on_ready():
 
 
 @client.command()
-async def task(ctx, *args):
+async def new(ctx, *args):
     if isinstance(ctx.channel, discord.channel.DMChannel):
         return
+    try:
+        taskk = Task(client, ctx)
+        taskk.wizard_messages.append(ctx.message)
+        await taskk.set_task_description(ctx, args)
+        await taskk.set_task_name(ctx)
+        await taskk.set_deadline(ctx)
+        taskk.task_notifications = 1
+        await taskk.save_task_to_db()
+        await taskk.save_user_task_to_db()
+        await taskk.clean_up(ctx.channel)
+        for i in taskk.user_list:
+            await taskk.post_embed(i)
+    except StopWizard:
+        print("wizard stopped")
+        await taskk.clean_up(ctx.channel)
+    except TypeError:
+        await taskk.clean_up(ctx.channel)
+        print("wizard timed out")
 
-    if args[0] == "new":
-        try:
-            taskk = Task(client, ctx)
-            taskk.wizard_messages.append(ctx.message)
-            await taskk.set_task_description(ctx, args)
-            await taskk.set_task_name(ctx)
-            await taskk.set_deadline(ctx)
-            taskk.task_notifications = 1
-            await taskk.save_task_to_db()
-            await taskk.save_user_task_to_db()
-            await taskk.clean_up(ctx.channel)
-            for i in taskk.user_list:
-                await taskk.post_embed(i)
-        except StopWizard:
-            print("wizard stopped")
-            await taskk.clean_up(ctx.channel)
-        except TypeError:
-            await taskk.clean_up(ctx.channel)
-            print("wizard timed out")
+@client.command()
+async def assign(ctx, args):
+    t = Assign(client, ctx)
+    await t.assign_to(ctx, args)
+    ######################################################
 
-    if args[0] == "assign":
-        await ctx.send("not implemented yet")
+
+
+
+
 
 
 client.run(SETTINGS.bot_token)
