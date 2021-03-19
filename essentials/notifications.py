@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import logging
+import time
 from asyncio import get_running_loop
 from time import strftime
 
@@ -75,7 +76,6 @@ class Notifications(commands.Cog):
                         await self.notify_user(td, 7, utc_now)
 
     async def startup_notifications(self):
-        print("ran")
         if hasattr(self.bot, 'db'):
             utc_now = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
 

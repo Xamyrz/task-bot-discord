@@ -14,7 +14,10 @@ from commands.task import *
 from essentials.messagecache import MessageCache
 from essentials.multi_server import ask_for_server
 
-client = commands.Bot(command_prefix="/task ")
+intents = discord.Intents.default()
+intents.members = True
+
+client = commands.Bot(command_prefix="/task ", intents=intents)
 mydbcursor = None
 logger = logging.getLogger('discord')
 
@@ -26,13 +29,11 @@ client.message_cache = MessageCache(client)
 @client.event
 async def on_ready():
     # mongodb below
+
     mongo = AsyncIOMotorClient(SETTINGS.mongo_db)
     client.db = mongo.taskmaster
     client.session = aiohttp.ClientSession()
     print(client.db)
-    for ext in extensions:
-        client.load_extension(ext)
-
     try:
         db_server_ids = [entry['_id'] async for entry in client.db.config.find({}, {})]
         for server in client.guilds:
@@ -44,17 +45,23 @@ async def on_ready():
                     upsert=True
                 )
         for members in server.members:
+            print(members)
             if members.bot:
                 continue
             async for message in members.history():
                 if message.author == client.user:
+                    print("trying to delete")
                     await message.delete()
 
     except Exception as e:
         print(e)
 
+
     with open('utils/emoji-compact.json', encoding='utf-8') as emojson:
         client.emoji_dict = json.load(emojson)
+
+    for ext in extensions:
+        client.load_extension(ext)
 
 
 @client.command()

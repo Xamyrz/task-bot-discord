@@ -76,7 +76,8 @@ class Task:
 
     async def clean_up(self, channel):
         if isinstance(channel, discord.TextChannel):
-            self.bot.loop.create_task(channel.delete_messages(self.wizard_messages))
+            print("hello")
+#            self.bot.loop.create_task(channel.delete_messages(self.wizard_messages))
 
     async def wizard_says(self, ctx, text, footer=True):
         embed = discord.Embed(title="task creation Wizard", description=text, color=SETTINGS.color)
@@ -289,11 +290,13 @@ class Task:
         async def check_users():
             j = 0
             # check for the same user in array
+            print(args.__len__())
+            print(self.task_role.__len__())
             if len(set(users)) != len(users):
                 return -1
             for member in ctx.guild.members:
                 if j >= args.__len__() - self.task_role.__len__():
-                    break
+                    return j
                 if member.id == users[j]:
                     j += 1
                     print(f"{member.id} {member.display_name} found")
@@ -325,7 +328,7 @@ class Task:
             return usrs
 
         users = await users_members_to_int()
-        if args.__len__() == await check_users() + await check_roles():
+        if args.__len__() == await check_roles() + await check_users():
             try:
                 self.task_name = await get_valid(force)
                 return
